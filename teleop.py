@@ -35,7 +35,7 @@ def setting_arms_state(arm):
         
 def pickup_transform(offset):
 
-    psm3_T_cam = PyKDL.Identity()
+    psm3_T_cam = PyKDL.Frame().Identity()
     psm3_T_cam.p[2] += offset
 
     return psm3_T_cam
@@ -53,21 +53,26 @@ def align_MTML(mtml, psm1, psm3):
     ## Get ECM pose w.r.t PSM3: {PSM3}^T_{ECM}
     ecm_T_psm3 = psm3.setpoint_cp()
 
-    psm3_T_ecm = ecm_T_psm3.Inverse()
+    ## Get pickup camera pose w.r.t {PSM3}^T_{CAM}
+    psm3_T_cam = pickup_transform(0.04)
+
+    ecm_T_cam = ecm_T_psm3 * psm3_T_cam
+
+    cam_T_ecm = ecm_T_cam.Inverse()
 
     ## Get MTML pose w.r.t display
     hrsv_T_mtml = mtml.measured_cp()
 
     ## The psm1 pose w.r.t psm3 is just inv(psm3_pose_ecm) * psm1_pose_ecm
-    psm3_T_psm1 = psm3_T_ecm * ecm_T_psm1
+    cam_T_psm1 = cam_T_ecm * ecm_T_psm1
 
-    hrsv_T_mtml.M = psm3_T_psm1.M
+    hrsv_T_mtml.M = cam_T_psm1.M
 
     mtml.move_cp(hrsv_T_mtml).wait()
 
     rospy.sleep(2)
 
-    alignment_offset = mtml.measured_cp().M.Inverse() * psm3_T_psm1.M
+    alignment_offset = mtml.measured_cp().M.Inverse() * cam_T_psm1.M
     
     return alignment_offset
 
@@ -95,11 +100,10 @@ def follow_mode(mtml, psm1, psm3, scale_factor, alignment_offset):
     print("PSM1 Current Pose (w.r.t ECM):")
     print(ecm_T_psm1_ini.p)
 
-    ## For every iteration:
-
-    i = 0
+    psm3_T_cam = pickup_transform(0.04)
+    
     message_rate = 0.01
-
+    ## For every iteration:
     while not rospy.is_shutdown():
 
 
@@ -109,18 +113,15 @@ def follow_mode(mtml, psm1, psm3, scale_factor, alignment_offset):
         
         ecm_T_psm3_curr = psm3.setpoint_cp() ## w.r.t ECM
                 
+        ecm_T_cam_curr = ecm_T_psm3_curr * psm3_T_cam
+
         ecm_T_psm1_next = ecm_T_psm1_ini
 
-        ecm_T_psm1_next.M = ecm_T_psm3_curr.M * hrsv_T_mtml_curr.M * alignment_offset
-
+        ecm_T_psm1_next.M = ecm_T_cam_curr.M * hrsv_T_mtml_curr.M * alignment_offset
 
         mtml_translation = scale_factor * (hrsv_T_mtml_curr.p - hrsv_T_mtml_ini.p)
 
-        ecm_T_psm1_next.p = ecm_T_psm1_next.p + ecm_T_psm3_curr.M * mtml_translation
-
-        if i == 1:
-            print("desired PSM1 pose: ")
-            print(ecm_T_psm1_next.p)
+        ecm_T_psm1_next.p = ecm_T_psm1_next.p + ecm_T_cam_curr.M * mtml_translation
 
 
         psm1.servo_cp(ecm_T_psm1_next)
@@ -130,12 +131,6 @@ def follow_mode(mtml, psm1, psm3, scale_factor, alignment_offset):
 
         hrsv_T_mtml_ini = hrsv_T_mtml_curr
         ecm_T_psm1_ini = ecm_T_psm1_next
-
-        i = i + 1
-
-
-
-
 
 if __name__ == '__main__':
     
@@ -155,7 +150,7 @@ if __name__ == '__main__':
     
     alignment_offset_angle = axis_angle_offset(alignment_offset)
     offset_angle_threshold = 5.0 ## Degrees
-    scale_factor = 0.2
+    scale_factor = 0.5
 
     print("The alignment offset is: " + str(alignment_offset_angle))
 
@@ -166,4 +161,3 @@ if __name__ == '__main__':
 
 
     follow_mode(mtml, psm1, psm3, scale_factor, alignment_offset)
-
