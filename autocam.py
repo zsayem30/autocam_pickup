@@ -21,10 +21,16 @@ def ring_transform(ring_offset):
 
     return psm1_T_R
     
-def orient_camera(psm1_T_R, ecm_T_R, ecm_T_w, df):
+def orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset):
 
     y_R = pm.toMatrix(ecm_T_R)[0:3, 1]
-    z_cam = - y_R / LA.norm(y_R)
+
+    y_R = y_R / LA.norm(y_R)
+    z_i = z_i / LA.norm(z_i)
+
+    sgn =  np.sign(np.dot(z_i, y_R)) 
+
+    z_cam =  sgn * y_R 
 
     z_w = pm.toMatrix(ecm_T_w)[0:3, 2]
 
@@ -41,8 +47,8 @@ def orient_camera(psm1_T_R, ecm_T_R, ecm_T_w, df):
     ecm_p_cam = ecm_T_R.p - df * z_cam_vec
 
     ecm_T_cam_desired = PyKDL.Frame(ecm_R_cam, ecm_p_cam)
-
-    ecm_T_psm3_desired = ecm_T_cam_desired * psm1_T_R.Inverse()
+    ecm_T_psm3_desired = ecm_T_cam_desired * psm3_T_cam.Inverse()
+    ecm_T_psm3_desired.p = ecm_T_psm3_desired.p  - offset
 
     return ecm_T_psm3_desired
 
@@ -77,26 +83,47 @@ if __name__ == '__main__':
     print(psm3_pose)
     ecm_pose = ecm.setpoint_cp()
 
-    ring_offset = 0.01 ## 1 cm
+    ring_offset = 0.015 ## 1.5 cm
+    cam_offset = 0.04 ## 4 cm
+
     psm1_T_R = ring_transform(ring_offset)
+    psm3_T_cam = pickup_transform(cam_offset)
+
     ecm_T_R = psm1_pose * psm1_T_R
     ecm_T_w = ecm.setpoint_cp().Inverse()
 
-    df = 0.10 ## in cm
+    df = 0.15 ## in cm
     ## HARD CODED OFFSET FOR GIVEN JOINT CONFIGURATION
-    offset = PyKDL.Vector(-0.0746767, -0.0291252, 0.285394)
-
+    # offset = PyKDL.Vector(-0.0746767, -0.0291252, 0.285394)
+    # offset = PyKDL.Vector(-0.082883,  -0.0159514,    0.289507)
+    #   -0.0790797,  -0.0131851,    0.279385
+    offset = PyKDL.Vector(-0.0790797,  -0.0131851,    0.279385)
     # Returns the desired pose of psm3 wrt ecm that should be executed.
-    ecm_T_psm3_desired_Pose = orient_camera(psm1_T_R, ecm_T_R, ecm_T_w, df)
+
+    z_i = pm.toMatrix(psm3_pose)[0:3, 2]
+
+    ecm_T_psm3_desired_Pose = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
 
     ## Maybe we can do some sort of an interpolation
     print("PSM3 desired Pose")
     print(ecm_T_psm3_desired_Pose)
     # First we set the orientation to match the desired orientation:
     # psm3_pose.M = ecm_T_psm3_desired_Pose.M
-    ecm_T_psm3_desired_Pose.p = ecm_T_psm3_desired_Pose.p  - offset
 
     psm3.move_cp(ecm_T_psm3_desired_Pose).wait()
+
+    rospy.sleep(2.0)
+    print("PSM3 actual Pose")
+    print(psm3.setpoint_cp())
+    print("Difference in position vector")
+    print((psm3.setpoint_cp().p - ecm_T_psm3_desired_Pose.p))
+
+    # print((psm1.measured_cp().p - psm3.measured_cp().p))
+
+
+
+    
+
 
     # iterations = 1000
     # dv = (1/iterations) * (ecm_T_psm3_desired_Pose.p - psm3_pose.p)
@@ -113,27 +140,3 @@ if __name__ == '__main__':
     # psm3.move_cp(ecm_T_psm3_desired_Pose).wait()   
     # print(ecm_T_psm3_desired_Pose)
     # psm3.move_cp(ecm_T_psm3_desired_Pose).wait()
-    rospy.sleep(2.0)
-    print("PSM3 actual Pose")
-    print(psm3.setpoint_cp())
-    print("Difference in position vector")
-    print((psm3.setpoint_cp().p - ecm_T_psm3_desired_Pose.p))
-
-    # print((psm1.measured_cp().p - psm3.measured_cp().p))
-
-
-
-    
-
-
-
-
-
-
-
-
-    
-
-
-
-
