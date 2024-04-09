@@ -2,11 +2,14 @@ import numpy as np
 import dvrk
 import PyKDL
 import rospy
+import sys
 import tf_conversions.posemath as pm
 from scipy.spatial.transform import Rotation as R
 from numpy import linalg as LA
 
-
+if sys.version_info.major < 3:
+    input = raw_input
+    
 def pickup_transform(cam_offset):
 
     psm3_T_cam = PyKDL.Frame().Identity()
@@ -27,12 +30,13 @@ def orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset):
 
     y_R = y_R / LA.norm(y_R)
     z_i = z_i / LA.norm(z_i)
+    z_w = pm.toMatrix(ecm_T_w)[0:3, 2] / LA.norm(pm.toMatrix(ecm_T_w)[0:3, 2])
+    
+    sgn1 =  np.sign(np.dot(z_i, y_R)) 
+    sgn2 = np.sign(np.dot(z_w, y_R))
 
-    sgn =  np.sign(np.dot(z_i, y_R)) 
+    z_cam = sgn1 * sgn2 * y_R 
 
-    z_cam =  sgn * y_R 
-
-    z_w = pm.toMatrix(ecm_T_w)[0:3, 2]
 
     x_cam = np.cross(z_w, z_cam) / LA.norm(np.cross(z_w, z_cam))
     y_cam = np.cross(z_cam, x_cam) / LA.norm(np.cross(z_cam, x_cam))
@@ -64,6 +68,8 @@ def setting_arms_state(arm):
         arm.enable()
         arm.home()
         
+# def initial_align(psm3, start_pose):
+    
 if __name__ == '__main__':
 
     print("Initializing arms...")
@@ -76,67 +82,51 @@ if __name__ == '__main__':
     setting_arms_state(psm3)
     setting_arms_state(ecm)
 
-    # Query the poses for psm1, psm3 and ecm
-    psm1_pose = psm1.setpoint_cp()
-    psm3_pose = psm3.setpoint_cp()
-    print("PSM3 initial Pose")
-    print(psm3_pose)
     ecm_pose = ecm.setpoint_cp()
 
     ring_offset = 0.015 ## 1.5 cm
     cam_offset = 0.04 ## 4 cm
+    df = 0.15 ## in cms
+    ## HARD CODED OFFSET FOR GIVEN JOINT CONFIGURATION
+    offset = PyKDL.Vector(   -0.0264435,   0.0354474,    0.294303)
 
+    # Find respective transforms from psm1 to ring and from psm3 to cam
     psm1_T_R = ring_transform(ring_offset)
-    psm3_T_cam = pickup_transform(cam_offset)
-
-    ecm_T_R = psm1_pose * psm1_T_R
+    psm3_T_cam = pickup_transform(cam_offset)    
     ecm_T_w = ecm.setpoint_cp().Inverse()
 
-    df = 0.15 ## in cm
-    ## HARD CODED OFFSET FOR GIVEN JOINT CONFIGURATION
-    # offset = PyKDL.Vector(-0.0746767, -0.0291252, 0.285394)
-    # offset = PyKDL.Vector(-0.082883,  -0.0159514,    0.289507)
-    #   -0.0790797,  -0.0131851,    0.279385
-    offset = PyKDL.Vector(-0.0790797,  -0.0131851,    0.279385)
-    # Returns the desired pose of psm3 wrt ecm that should be executed.
+    message_rate = 0.01
+
+    ## For first iteration, we need to gracefully park PSM3 at the start of our tracking...
+    # Query the poses for psm1, psm3 and ecm
+    psm1_pose = psm1.setpoint_cp()
+    psm3_pose = psm3.setpoint_cp()
+
+    ecm_T_R = psm1_pose * psm1_T_R
 
     z_i = pm.toMatrix(psm3_pose)[0:3, 2]
 
     ecm_T_psm3_desired_Pose = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
-
-    ## Maybe we can do some sort of an interpolation
-    print("PSM3 desired Pose")
-    print(ecm_T_psm3_desired_Pose)
-    # First we set the orientation to match the desired orientation:
-    # psm3_pose.M = ecm_T_psm3_desired_Pose.M
-
+    
+    print("Parking PSM3 to starting position...")
+    fixed_posed = ecm_T_psm3_desired_Pose.p
     psm3.move_cp(ecm_T_psm3_desired_Pose).wait()
 
-    rospy.sleep(2.0)
-    print("PSM3 actual Pose")
-    print(psm3.setpoint_cp())
-    print("Difference in position vector")
-    print((psm3.setpoint_cp().p - ecm_T_psm3_desired_Pose.p))
-
-    # print((psm1.measured_cp().p - psm3.measured_cp().p))
-
-
-
+    input("    Press Enter to start autonomous tracking...")
     
+    ## For every iteration:
+    while not rospy.is_shutdown():
 
+        # Query the poses for psm1, psm3 and ecm
+        psm1_pose = psm1.setpoint_cp()
+        psm3_pose = psm3.setpoint_cp()
 
-    # iterations = 1000
-    # dv = (1/iterations) * (ecm_T_psm3_desired_Pose.p - psm3_pose.p)
-    # message_rate = 0.01
+        ecm_T_R = psm1_pose * psm1_T_R
 
-    # for i in range(iterations):
+        z_i = pm.toMatrix(psm3_pose)[0:3, 2]
 
-    #     psm3_pose.p = psm3_pose.p + dv
-    #     psm3.servo_cp(psm3_pose)
-
-    #     rospy.sleep(message_rate)
-
-    # psm3_pose.M = ecm_T_psm3_desired_Pose.M
-    # psm3.move_cp(ecm_T_psm3_desired_Pose).wait()   
-    # print(ecm_T_psm3_desired_Pose)
-    # psm3.move_cp(ecm_T_psm3_desired_Pose).wait()
+        ecm_T_psm3_desired_Pose = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
+        # ecm_T_psm3_desired_Pose.p = fixed_posed
+        
+        psm3.move_cp(ecm_T_psm3_desired_Pose)
+        rospy.sleep(message_rate)
