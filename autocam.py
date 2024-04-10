@@ -32,10 +32,12 @@ def orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset):
     z_i = z_i / LA.norm(z_i)
     z_w = pm.toMatrix(ecm_T_w)[0:3, 2] / LA.norm(pm.toMatrix(ecm_T_w)[0:3, 2])
     
-    sgn1 =  np.sign(np.dot(z_i, y_R)) 
+    # sgn1 =  np.sign(np.dot(z_i, y_R)) 
     sgn2 = np.sign(np.dot(z_w, y_R))
 
-    z_cam = sgn1 * sgn2 * y_R 
+    # print(sgn1 * sgn2)
+
+    z_cam = - sgn2 * y_R 
 
 
     x_cam = np.cross(z_w, z_cam) / LA.norm(np.cross(z_w, z_cam))
@@ -49,6 +51,35 @@ def orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset):
 
 
     ecm_p_cam = ecm_T_R.p - df * z_cam_vec
+
+    ecm_T_cam_desired = PyKDL.Frame(ecm_R_cam, ecm_p_cam)
+    ecm_T_psm3_desired = ecm_T_cam_desired * psm3_T_cam.Inverse()
+    ecm_T_psm3_desired.p = ecm_T_psm3_desired.p  - offset
+
+    return ecm_T_psm3_desired, sgn2
+
+
+def compute_intermediate(psm3_T_cam, ecm_T_R, ecm_T_w, df, offset):
+
+    x_R = pm.toMatrix(ecm_T_R)[0:3, 0]
+
+    x_R = x_R / LA.norm(x_R)
+    z_w = pm.toMatrix(ecm_T_w)[0:3, 2] / LA.norm(pm.toMatrix(ecm_T_w)[0:3, 2])
+    
+    z_cam = x_R 
+
+
+    x_cam = np.cross(z_w, z_cam) / LA.norm(np.cross(z_w, z_cam))
+    y_cam = np.cross(z_cam, x_cam) / LA.norm(np.cross(z_cam, x_cam))
+
+    x_cam_vec = PyKDL.Vector(x_cam[0], x_cam[1], x_cam[2])
+    y_cam_vec = PyKDL.Vector(y_cam[0], y_cam[1], y_cam[2])
+    z_cam_vec = PyKDL.Vector(z_cam[0], z_cam[1], z_cam[2])
+
+    ecm_R_cam = PyKDL.Rotation(x_cam_vec, y_cam_vec, z_cam_vec)
+
+
+    ecm_p_cam = ecm_T_R.p - df/2 * z_cam_vec
 
     ecm_T_cam_desired = PyKDL.Frame(ecm_R_cam, ecm_p_cam)
     ecm_T_psm3_desired = ecm_T_cam_desired * psm3_T_cam.Inverse()
@@ -86,9 +117,9 @@ if __name__ == '__main__':
 
     ring_offset = 0.015 ## 1.5 cm
     cam_offset = 0.04 ## 4 cm
-    df = 0.15 ## in cms
+    df = 0.075 ## in cms
     ## HARD CODED OFFSET FOR GIVEN JOINT CONFIGURATION
-    offset = PyKDL.Vector(   -0.0264435,   0.0354474,    0.294303)
+    offset = PyKDL.Vector(  -0.0484953,   0.0415204,    0.296101)
 
     # Find respective transforms from psm1 to ring and from psm3 to cam
     psm1_T_R = ring_transform(ring_offset)
@@ -106,7 +137,7 @@ if __name__ == '__main__':
 
     z_i = pm.toMatrix(psm3_pose)[0:3, 2]
 
-    ecm_T_psm3_desired_Pose = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
+    ecm_T_psm3_desired_Pose, prev_sgn = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
     
     print("Parking PSM3 to starting position...")
     fixed_posed = ecm_T_psm3_desired_Pose.p
@@ -125,8 +156,17 @@ if __name__ == '__main__':
 
         z_i = pm.toMatrix(psm3_pose)[0:3, 2]
 
-        ecm_T_psm3_desired_Pose = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
-        # ecm_T_psm3_desired_Pose.p = fixed_posed
-        
+        ecm_T_psm3_desired_Pose, curr_sgn = orient_camera(psm3_T_cam, ecm_T_R, ecm_T_w, z_i, df, offset)
+
+        if prev_sgn != curr_sgn:
+
+            ecm_T_psm3_intermediate = compute_intermediate(psm3_T_cam, ecm_T_R, ecm_T_w, df, offset)
+            print("Entered Loop")
+            psm3.move_cp(ecm_T_psm3_intermediate).wait()
+            # rospy.sleep(message_rate)
+
         psm3.move_cp(ecm_T_psm3_desired_Pose)
         rospy.sleep(message_rate)
+
+        prev_sgn = curr_sgn
+
